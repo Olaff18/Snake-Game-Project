@@ -10,8 +10,11 @@ extern "C" {
 
 #define SCREEN_WIDTH	640
 #define SCREEN_HEIGHT	480
-#define INIT_LENGTH		50
-#define MAX_TURNING_POINTS 100
+#define INIT_LENGTH		10
+#define MAX_TURNING_POINTS 1000
+#define MOVE_DELAY         100
+#define TOLERANCE          5
+#define STEP_SIZE          5
 
 
 enum Direction{
@@ -163,8 +166,26 @@ void directions(SDL_Rect *body, int *dir, int *tpCount, TurningPoint *turningPoi
 	}
 }
 
-void restartGame(SDL_Rect *body, int *dir, double *worldTime, SDL_Surface *screen, int *tpCount) {
+void restartGame(SDL_Rect *body, int *dir, double *worldTime, SDL_Surface *screen, int *tpCount, int *length) {
     // Reset the head position
+	if(*length > INIT_LENGTH){
+		SDL_Rect *new_body = (SDL_Rect *)realloc(body, (INIT_LENGTH) * sizeof(SDL_Rect));
+		if (new_body == NULL) {
+			// Handle realloc failure
+			printf("Memory allocation failed for body array\n");
+			// Exit or return from function as appropriate
+			return;
+		}
+		body = new_body;
+		int *new_dir = (int *)realloc(dir, (INIT_LENGTH) * sizeof(int));
+		if (new_dir == NULL) {
+			// Handle realloc failure
+			printf("Memory allocation failed for direction array\n");
+			return;
+		}
+		dir = new_dir;
+		*length = INIT_LENGTH;
+	}
 	int p=0;
     for(int i=0; i<INIT_LENGTH; i++){
 		body[i] = {SCREEN_WIDTH/2-p,SCREEN_HEIGHT/2,10,10};
@@ -246,6 +267,7 @@ int main(){
     quit = 0;
 	fpsTimer = 0;
     worldTime = 0;
+	int lastMoveTime = 0;
 	t1 = SDL_GetTicks();
 
 	fruitX = rand() % (SCREEN_WIDTH - 10);
@@ -260,6 +282,7 @@ int main(){
 	SDL_Rect* body = (SDL_Rect*) malloc(INIT_LENGTH*sizeof(SDL_Rect));
 	int* dir = (int*)malloc(INIT_LENGTH * sizeof(int));
 	int p=0;
+	int length = INIT_LENGTH;
 	for(int i=0; i<INIT_LENGTH; i++){
 		body[i] = {SCREEN_WIDTH/2-p,SCREEN_HEIGHT/2,10,10};
 		dir[i] = RIGHT;
@@ -271,6 +294,7 @@ int main(){
 		t1 = t2;
 
 		worldTime += delta;
+
         SDL_FillRect(screen, NULL, czarny);
 
         fpsTimer += delta;
@@ -292,23 +316,27 @@ int main(){
 			switch(event.type) {
 				case SDL_KEYDOWN:
 					if(event.key.keysym.sym == SDLK_ESCAPE) quit = 1;
-					// if(event.key.keysym.sym == SDLK_n) restartGame(&headRect, &dir, &worldTime, screen);
-					if(event.key.keysym.sym == SDLK_UP && dir[0] != DOWN){
-                        dir[0] = UP;
-						turningPoints[tpCount++] = (TurningPoint){body[0].x, body[0].y, UP};
-                    }
-					if(event.key.keysym.sym == SDLK_DOWN && dir[0] != UP) {
-                        dir[0] = DOWN;
-						turningPoints[tpCount++] = (TurningPoint){body[0].x, body[0].y, DOWN};
-                    }
-                    if(event.key.keysym.sym == SDLK_LEFT && dir[0] != RIGHT) {
-                        dir[0] = LEFT;
-						turningPoints[tpCount++] = (TurningPoint){body[0].x, body[0].y, LEFT};
-                    }
-                    if(event.key.keysym.sym == SDLK_RIGHT && dir[0] != LEFT) {
-                        dir[0] = RIGHT;
-						turningPoints[tpCount++] = (TurningPoint){body[0].x, body[0].y, RIGHT};
-                    }
+					if(event.key.keysym.sym == SDLK_n) restartGame(body, dir, &worldTime, screen, &tpCount, &length);
+					// check if it's time for the next movement
+					if (t2 - lastMoveTime > MOVE_DELAY) {
+						lastMoveTime = t2;
+						if(event.key.keysym.sym == SDLK_UP && dir[0] != DOWN){
+							dir[0] = UP;
+							turningPoints[tpCount++] = (TurningPoint){body[0].x, body[0].y, UP};
+						}
+						if(event.key.keysym.sym == SDLK_DOWN && dir[0] != UP) {
+							dir[0] = DOWN;
+							turningPoints[tpCount++] = (TurningPoint){body[0].x, body[0].y, DOWN};
+						}
+						if(event.key.keysym.sym == SDLK_LEFT && dir[0] != RIGHT) {
+							dir[0] = LEFT;
+							turningPoints[tpCount++] = (TurningPoint){body[0].x, body[0].y, LEFT};
+						}
+						if(event.key.keysym.sym == SDLK_RIGHT && dir[0] != LEFT) {
+							dir[0] = RIGHT;
+							turningPoints[tpCount++] = (TurningPoint){body[0].x, body[0].y, RIGHT};
+						}
+					}
 					break;
 				case SDL_KEYUP:
 					break;
@@ -323,31 +351,37 @@ int main(){
 		// }
             // moving the head
 		int selfCollision = 0;
-		for (int i = 0; i < INIT_LENGTH; i++) {
+		for (int i = 0; i < length; i++) {
+						// Move the segment in its current direction
+			switch (dir[i]) {
+				case DOWN: body[i].y += STEP_SIZE; break;
+				case UP: body[i].y -= STEP_SIZE; break;
+				case RIGHT: body[i].x += STEP_SIZE; break;
+				case LEFT: body[i].x -= STEP_SIZE; break;
+			}
+			// if(i != 0 && abs(body[0].x - body[i].x) < TOLERANCE && abs(body[0].y - body[i].y) < TOLERANCE){
+			// 	selfCollision = 1;
+			// 	break;
+			// }
+			if (i != 0 && body[0].x == body[i].x && body[0].y == body[i].y) {
+				selfCollision = 1;
+				break;
+			}
     		// Check each turning point
 			for (int j = 0; j < tpCount; j++) {
-				if (body[i].x == turningPoints[j].x && body[i].y == turningPoints[j].y) {
+				if (abs(body[i].x - turningPoints[j].x) < TOLERANCE && abs(body[i].y - turningPoints[j].y) < TOLERANCE) {
 					dir[i] = turningPoints[j].dir;
 					// Remove the turning point if it's no longer relevant
-					if (i == INIT_LENGTH - 1) { // Last segment passed the turning point
+					
+					if (i == length - 1) { // Last segment passed the turning point
 						for (int k = j; k < tpCount - 1; k++) {
-							turningPoints[k] = turningPoints[k + 1];
+							turningPoints[k].dir = turningPoints[k + 1].dir;
+							turningPoints[k].y = turningPoints[k + 1].y;
+							turningPoints[k].x = turningPoints[k + 1].x;
 						}
 						tpCount--;
 					}
 				}
-			}
-
-			// Move the segment in its current direction
-			switch (dir[i]) {
-				case DOWN: body[i].y += 5; break;
-				case UP: body[i].y -= 5; break;
-				case RIGHT: body[i].x += 5; break;
-				case LEFT: body[i].x -= 5; break;
-			}
-			if(body[0].x == body[i].x && body[0].y == body[i].y && i != 0){
-				selfCollision = 1;
-				break;
 			}
 		}
 		if (selfCollision) {
@@ -374,7 +408,7 @@ int main(){
 							quit = 1;
 						} else if (event.key.keysym.sym == SDLK_n) {
 							waitForInput = 0; // Restart game
-							restartGame(body, dir, &worldTime, screen, &tpCount);
+							restartGame(body, dir, &worldTime, screen, &tpCount, &length);
 						}
 					}
 				}
@@ -386,6 +420,56 @@ int main(){
 			SDL_RenderPresent(renderer);
 		}
 		directions(body, dir, &tpCount, turningPoints);
+		// zmienic na zewnetrzne pixele
+		for(int i=body[0].x; i<body[0].x+10; i++){
+			for(int j=body[0].y; j<body[0].y+10; j++){
+				for(int k=Fruit.x; k<Fruit.x+10; k++){
+					for(int l=Fruit.y; l<Fruit.y+10; l++){
+						if(i == k && j == l){
+							fruitX = rand() % (SCREEN_WIDTH - 10);
+							fruitY = 37 + rand() % (SCREEN_HEIGHT - 37 - 10 + 1);
+							Fruit.x = fruitX;
+							Fruit.y = fruitY;
+							length = length + 1;
+							SDL_Rect *new_body = (SDL_Rect *)realloc(body, (length) * sizeof(SDL_Rect));
+							if (new_body == NULL) {
+								// Handle realloc failure
+								printf("Memory allocation failed for body array\n");
+								// Exit or return from function as appropriate
+								return 1;
+							}
+							body = new_body;
+							int *new_dir = (int *)realloc(dir, (length) * sizeof(int));
+							if (new_dir == NULL) {
+								// Handle realloc failure
+								printf("Memory allocation failed for direction array\n");
+								return 1;
+							}
+							dir = new_dir;
+							if(dir[length-2] == UP){
+								body[length-1].x = body[length-2].x;
+								body[length-1].y = body[length-2].y+10;
+							}
+							if(dir[length-2] == DOWN){
+								body[length-1].x = body[length-2].x;
+								body[length-1].y = body[length-2].y-10;
+							}
+							if(dir[length-2] == RIGHT){
+								body[length-1].x = body[length-2].x-10;
+								body[length-1].y = body[length-2].y;
+							}
+							if(dir[length-2] == LEFT){
+								body[length-1].x = body[length-2].x+10;
+								body[length-1].y = body[length-2].y;
+							}
+							body[length-1].h=10;
+							body[length-1].w = 10;
+							dir[length-1] = dir[length-2];
+						}
+					}
+				}
+			}
+		}
 
         // clear the window
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
@@ -393,7 +477,7 @@ int main(){
 
         // draw body
         // SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-		for(int i=0; i<INIT_LENGTH; i++){
+		for(int i=0; i<length; i++){
 			SDL_FillRect(screen, &body[i], bialy);
 		}
 
