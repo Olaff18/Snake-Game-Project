@@ -1,3 +1,6 @@
+// tutorials used:
+// https://lazyfoo.net/tutorials/SDL/
+
 #define _USE_MATH_DEFINES
 #include<math.h>
 #include<stdio.h>
@@ -22,10 +25,13 @@ extern "C" {
 #define FRUIT_SIZE         10	// dimensions of the fruit
 #define SEGMENT_SIZE       10	// dimensions of the snake element
 #define DELAY			   50	// delay of the game - snakes speed
-#define RED_INT 		   5	// interval after which red dot disappears (s)
+#define RED_INT 		   10	// interval after which red dot disappears (s)
 #define RED_SPEED          20	// slowing factor of red dot (%)
 #define RED_START          1	// fastest time of appearing of the red dot
 #define RED_END            5	// longest time of appearing of the red dot
+#define SCORE_FILE "scores.txt" // scores file name
+#define BEST_COUNT 3			// amount of scores
+#define MAX_NAME_LENGTH 20		// maximum length of a name
 
 enum Direction{
 	STOP = 0,
@@ -36,19 +42,19 @@ enum Direction{
 };
 
 typedef struct {
-	int x;
-	int y;
-	int w;
-	int h;
-	int dir;
-} Rect;
-
-typedef struct {
     int x;
     int y;
     int dir;
-} TurningPoint;
+} TurningPoint; // struct for collecting turning points
 
+typedef struct {
+    int score;
+    char name[100];
+} BestScore; // struct for collecting best scores
+
+//------------------------------------------------
+//-------- PROF. DERENIOWSKI'S FUNCTIONS ---------
+//------------------------------------------------
 
 // narysowanie napisu txt na powierzchni screen, zaczynaj¹c od punktu (x, y)
 // charset to bitmapa 128x128 zawieraj¹ca znaki
@@ -74,20 +80,6 @@ void DrawString(SDL_Surface *screen, int x, int y, const char *text,
 		x += 8;
 		text++;
 		};
-	};
-
-
-// narysowanie na ekranie screen powierzchni sprite w punkcie (x, y)
-// (x, y) to punkt rodka obrazka sprite na ekranie
-// draw a surface sprite on a surface screen in point (x, y)
-// (x, y) is the center of sprite on screen
-void DrawSurface(SDL_Surface *screen, SDL_Surface *sprite, int x, int y) {
-	SDL_Rect dest;
-	dest.x = x - sprite->w / 2;
-	dest.y = y - sprite->h / 2;
-	dest.w = sprite->w;
-	dest.h = sprite->h;
-	SDL_BlitSurface(sprite, NULL, screen, &dest);
 	};
 
 
@@ -129,12 +121,188 @@ void DrawRectangle(SDL_Surface *screen, int x, int y, int l, int k,
 extern "C"
 #endif
 
-// function for generating a random num
-int getRandom(int max_value, int min_value) {
-    int random_value = rand() % ((++max_value - min_value)) + min_value;
-    return random_value;
+//------------------------------------------------
+//---------  FILE/SCORES FUNCTIONS ---------------
+//------------------------------------------------
+
+void loadBestScores(BestScore* scores) { // opening the file
+    FILE* file = fopen(SCORE_FILE, "r");
+    if (file == NULL) {
+        // if the file doesnt exist init to default values
+        for (int i = 0; i < BEST_COUNT; i++) {
+            scores[i].score = 0;
+            strcpy(scores[i].name, "---");  // placeholder for empty names
+        }
+        return;
+    }
+
+    for (int i = 0; i < BEST_COUNT; i++) {
+        if (fscanf(file, "%d %s", &scores[i].score, scores[i].name) != 2) { // returns 2 only when succesful
+            // default values if the file is incomplete
+            scores[i].score = 0;
+            strcpy(scores[i].name, "---");
+        }
+    }
+    fclose(file);
 }
 
+void collectPlayerName(SDL_Texture* scrtex, SDL_Renderer* renderer, SDL_Surface* screen, SDL_Surface* charset, char* playerName, int red, int blue) { // collecting players name when top3 score
+    int cursor = 0;
+    playerName[0] = '\0';  // starting with empty name
+
+    SDL_Event event;
+    int done = 0;
+
+    while (!done) {
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT) {
+                exit(0);
+            } else if (event.type == SDL_KEYDOWN) {
+                if (event.key.keysym.sym == SDLK_BACKSPACE && cursor > 0) {
+                    playerName[--cursor] = '\0'; // backspade handling
+                } else if (event.key.keysym.sym == SDLK_RETURN && cursor > 0) {
+                    // confirm input if enter
+                    done = 1;
+                } else if (event.key.keysym.sym == SDLK_ESCAPE) {
+                    // exit the input process
+                    playerName[0] = '\0';
+                    done = 1;
+                } else {
+                    // valid characters
+                    if (cursor < MAX_NAME_LENGTH - 1 && ((event.key.keysym.sym >= SDLK_a && event.key.keysym.sym <= SDLK_z) ||
+                                                         (event.key.keysym.sym >= SDLK_0 && event.key.keysym.sym <= SDLK_9) ||
+                                                          event.key.keysym.sym == SDLK_SPACE)) { 
+                        playerName[cursor++] = (char)event.key.keysym.sym;
+                        playerName[cursor] = '\0'; // ensuring it remains null terminated
+                    }
+                }
+            }
+        }
+
+        // rendering the input prompt
+        DrawRectangle(screen, 100, 100, SCREEN_WIDTH - 200, 100, red, blue);
+        char text[128];
+        sprintf(text, "Enter your name: %s", playerName);
+        DrawString(screen, SCREEN_WIDTH / 2 - strlen(text) * 8 / 2, 120, text, charset);
+
+        // updating the screen
+        SDL_UpdateTexture(scrtex, NULL, screen->pixels, screen->pitch);
+        SDL_RenderClear(renderer);
+        SDL_RenderCopy(renderer, scrtex, NULL, NULL);
+        SDL_RenderPresent(renderer);
+    }
+}
+
+//saving scores in the file
+void saveBestScores(BestScore* scores) { 
+    FILE* file = fopen(SCORE_FILE, "w");
+    if (file == NULL) {
+        printf("Error: Unable to open score file for writing.\n");
+        return;
+    }
+
+    for (int i = 0; i < BEST_COUNT; i++) {
+        fprintf(file, "%d %s\n", scores[i].score, scores[i].name); // save score and name
+    }
+    fclose(file);
+}
+
+// replacing scores if needed
+void updateBestScores(SDL_Texture* scrtex, SDL_Renderer* renderer, SDL_Surface* screen, SDL_Surface* charset, BestScore* scores, int points, int red, int blue) {
+    for (int i = 0; i < BEST_COUNT; i++) {
+        if (points > scores[i].score) {
+            // shifting lower scores down
+            for (int j = BEST_COUNT - 1; j > i; j--) {
+                scores[j] = scores[j - 1];
+            }
+
+            // collecting the name
+            char playerName[MAX_NAME_LENGTH];
+            collectPlayerName(scrtex, renderer, screen, charset, playerName, red, blue);
+
+            // upd the current score and name
+            scores[i].score = points;
+            strncpy(scores[i].name, playerName, MAX_NAME_LENGTH - 1);
+            scores[i].name[MAX_NAME_LENGTH - 1] = '\0'; // making sure for the null termination
+            break;
+        }
+    }
+}
+
+// finally displaying top scores
+void displayBestScores(SDL_Texture* scrtex, SDL_Renderer* renderer, SDL_Surface* screen, BestScore* scores, int red, int blue, char text[], SDL_Surface* charset) {
+    DrawRectangle(screen, 100, 100, SCREEN_WIDTH - 200, 2 * MENU_HEIGHT, red, blue);
+
+    strcpy(text, "=== Best Scores ===");
+    DrawString(screen, SCREEN_WIDTH / 2 - strlen(text) * 8 / 2, 110, text, charset);
+
+    for (int i = 0; i < BEST_COUNT; i++) {
+        sprintf(text, "%d. %s - %d", i + 1, scores[i].name, scores[i].score);
+        DrawString(screen, SCREEN_WIDTH / 2 - strlen(text) * 8 / 2, 140 + i * 20, text, charset); // Position each entry
+    }
+    SDL_UpdateTexture(scrtex, NULL, screen->pixels, screen->pitch);
+    SDL_RenderClear(renderer);
+    SDL_RenderCopy(renderer, scrtex, NULL, NULL);
+    SDL_RenderPresent(renderer);
+}
+
+//------------------------------------------------
+//----------------  RESTART ----------------------
+//------------------------------------------------
+
+// game restart logic
+void restartGame(SDL_Texture* scrtex, SDL_Renderer* renderer, SDL_Rect *body, int *dir, double *worldTime, SDL_Surface *screen, int *tpCount, int *length, double *delay, int *spdup, int *t3, int* randd, int *points, BestScore *scores, int red, int blue, char text[], SDL_Surface *charset) {
+    // reset the head position
+	if(*length > INIT_LENGTH){
+		SDL_Rect *new_body = (SDL_Rect *)realloc(body, (INIT_LENGTH) * sizeof(SDL_Rect));
+		if (new_body == NULL) {
+			// handle realloc failure
+			printf("Memory allocation failed for body array\n");
+			return;
+		}
+		body = new_body;
+		int *new_dir = (int *)realloc(dir, (INIT_LENGTH) * sizeof(int));
+		if (new_dir == NULL) {
+			// handle realloc failure
+			printf("Memory allocation failed for direction array\n");
+			return;
+		}
+		dir = new_dir;
+		*length = INIT_LENGTH;
+	}
+	int p=0;
+    for(int i=0; i<INIT_LENGTH; i++){
+		body[i] = {SCREEN_WIDTH/2-p,SCREEN_HEIGHT/2,10,10};
+		dir[i] = RIGHT;
+		p+=10;
+	}
+
+    // reset time, score, and variables
+    *worldTime = 0;
+	*tpCount = 0;
+	*delay = DELAY;
+	*spdup = 1;
+	*t3 = 0;
+	*randd = 1;
+
+	// scores logic
+	loadBestScores(scores);
+	updateBestScores(scrtex, renderer, screen, charset, scores, *points, red, blue);
+	displayBestScores(scrtex, renderer, screen, scores, red, blue, text, charset);
+	saveBestScores(scores);
+	SDL_Delay(5000); // 5s wait time to show scores
+	*points = 0;
+	
+
+    SDL_FillRect(screen, NULL, SDL_MapRGB(screen->format, 0x00, 0x00, 0x00));
+	
+}
+
+//------------------------------------------------
+//----------------  MOVEMENT ---------------------
+//------------------------------------------------
+
+// setting directions if border is hit
 void directions(SDL_Rect *body, int *dir, int *tpCount, TurningPoint *turningPoints, int* u_no, int* d_no, int* r_no, int* l_no){
 	if (body[0].x < body[0].h/2-1) { // if snake head meets left border
 		if (dir[0] == LEFT && body[0].y > MENU_HEIGHT+body[0].h/2+20+18) {
@@ -149,14 +317,14 @@ void directions(SDL_Rect *body, int *dir, int *tpCount, TurningPoint *turningPoi
 	} 
 	else{
 		*l_no = 0;
-	}
+	} // if head meets right border
 	if (body[0].x > (SCREEN_WIDTH - body[0].w - 4)) {
 		if (dir[0] == RIGHT && body[0].y < SCREEN_HEIGHT-15){
 			dir[0]= DOWN;   // change direction to left isf possible
 			turningPoints[(*tpCount)++] = (TurningPoint){body[0].x, body[0].y, DOWN};
 		}
 		else if (dir[0] == RIGHT && body[0].y >= SCREEN_HEIGHT-15){
-			dir[0] = UP;// if it is			
+			dir[0] = UP;		
 			turningPoints[(*tpCount)++] = (TurningPoint){body[0].x, body[0].y, UP};
 		}
 		*r_no = 1;
@@ -164,23 +332,22 @@ void directions(SDL_Rect *body, int *dir, int *tpCount, TurningPoint *turningPoi
 	else{
 		*r_no = 0;
 	}
-
+	// if head meets the upper border
 	if (body[0].y < MENU_HEIGHT+body[0].h/2 +5+18) {
-		// printf("%d", headRect.x);
 		if (dir[0]== UP && body[0].x > SCREEN_WIDTH-body[0].w - 6){
 			dir[0] = LEFT;	
 			turningPoints[(*tpCount)++] = (TurningPoint){body[0].x, body[0].y, LEFT};
 			*u_no = 1;
 		}
 		else if (dir[0] == UP && body[0].x < SCREEN_WIDTH-body[0].w/2){
-			dir[0] = RIGHT;   // Change direction to down if possible
+			dir[0] = RIGHT;  
 			turningPoints[(*tpCount)++] = (TurningPoint){body[0].x, body[0].y, RIGHT};
 		}
 		*u_no = 1;
 	} 
 	else{
 		*u_no = 0;
-	}
+	} // if head meets the lower border
 	if (body[0].y > SCREEN_HEIGHT-1.5*body[0].h) {
 		if (dir[0] == DOWN && body[0].x > body[0].w/2){
 			dir[0] = LEFT;
@@ -197,53 +364,110 @@ void directions(SDL_Rect *body, int *dir, int *tpCount, TurningPoint *turningPoi
 	}
 }
 
-void restartGame(SDL_Rect *body, int *dir, double *worldTime, SDL_Surface *screen, int *tpCount, int *length, double *delay, int *spdup, int *t3, int* randd) {
-    // Reset the head position
-	if(*length > INIT_LENGTH){
-		SDL_Rect *new_body = (SDL_Rect *)realloc(body, (INIT_LENGTH) * sizeof(SDL_Rect));
-		if (new_body == NULL) {
-			// Handle realloc failure
-			printf("Memory allocation failed for body array\n");
-			// Exit or return from function as appropriate
-			return;
+// moving snake based on its dir
+void move(int *dir, TurningPoint *turningPoints, SDL_Rect *body, int *selfCollision, int *tpCount, int step, int length){
+	for (int i = 0; i < length; i++) {
+		// move the segment in its current direction
+		switch (dir[i]) {
+			case DOWN: body[i].y += (int)step; break;
+			case UP: body[i].y -= (int)step; break;
+			case RIGHT: body[i].x += (int)step; break;
+			case LEFT: body[i].x -= (int)step; break;
 		}
-		body = new_body;
-		int *new_dir = (int *)realloc(dir, (INIT_LENGTH) * sizeof(int));
-		if (new_dir == NULL) {
-			// Handle realloc failure
-			printf("Memory allocation failed for direction array\n");
-			return;
+		// if self collision
+		if (i != 0 && body[0].x == body[i].x && body[0].y == body[i].y) {
+			*selfCollision = 1;
+			break;
 		}
-		dir = new_dir;
-		*length = INIT_LENGTH;
+		// check each turning point
+		for (int j = 0; j < *tpCount; j++) {
+			// if the segment reaches the turning point, its direction is changed accordingly
+			if (abs(body[i].x - turningPoints[j].x) < TOLERANCE && abs(body[i].y - turningPoints[j].y) < TOLERANCE) {
+				dir[i] = turningPoints[j].dir;
+				// remove the turning point if it's no longer relevant
+				if (i == length - 1) { // last segment passed the turning point
+					for (int k = j; k < *tpCount - 1; k++) {
+						turningPoints[k].dir = turningPoints[k + 1].dir;
+						turningPoints[k].y = turningPoints[k + 1].y;
+						turningPoints[k].x = turningPoints[k + 1].x;
+					}
+					(*tpCount)--;
+				}
+			}
+		}
 	}
-	int p=0;
-    for(int i=0; i<INIT_LENGTH; i++){
-		body[i] = {SCREEN_WIDTH/2-p,SCREEN_HEIGHT/2,10,10};
-		dir[i] = RIGHT;
-		p+=10;
-	}
-
-    // Reset time, scores, or other variables
-    *worldTime = 0;
-	*tpCount = 0;
-	*delay = DELAY;
-	*spdup = 1;
-	*t3 = 0;
-	*randd = 1;
-
-    // Clear screen (if needed)
-    SDL_FillRect(screen, NULL, SDL_MapRGB(screen->format, 0x00, 0x00, 0x00));
-
-    // Log or print a message if debugging
 }
 
-void mainLoop(TurningPoint *turningPoints, SDL_Event event, int *lastMoveTime, int t2, int *quit, SDL_Rect *body, int* dir, double *worldTime, SDL_Surface *screen, int *tpCount, int *length, double *delay, int *spdup, int *t3, int* randd, int u_no, int d_no, int r_no, int l_no){
+// if self collision happens
+void collision(SDL_Surface *screen, SDL_Surface *charset, SDL_Renderer *renderer, SDL_Texture *scrtex, int *selfCollision, int *quit, char text[], SDL_Rect *body, int* dir, double *worldTime, int *tpCount, int *length, int black, int red, int blue, double *delay, int *spdup, int *t3, int *randd, int *points, BestScore *scores){
+	if (*selfCollision) {
+		*selfCollision = 0;
+		DrawRectangle(screen, SCREEN_WIDTH / 2 - 110, SCREEN_HEIGHT / 2 - 22, 220, 54, red, blue); // Adjust rectangle to center
+		sprintf(text, "Snake hit itself!");
+		DrawString(screen, screen->w / 2 - strlen(text) * 8 / 2, screen->h / 2 - 16, text, charset);
+		sprintf(text, "1. Press ESC to exit;");
+		DrawString(screen, screen->w / 2 - strlen(text) * 8 / 2, screen->h / 2, text, charset);
+		sprintf(text, "2. Press N for a new game;");
+		DrawString(screen, screen->w / 2 - strlen(text) * 8 / 2, screen->h / 2 + 16, text, charset);
+
+		SDL_UpdateTexture(scrtex, NULL, screen->pixels, screen->pitch);
+		SDL_RenderCopy(renderer, scrtex, NULL, NULL);
+		SDL_RenderPresent(renderer);
+
+		int waitForInput = 1;
+		while (waitForInput) {
+			SDL_Event event;
+			while (SDL_PollEvent(&event)) {
+				if (event.type == SDL_KEYDOWN) {
+					if (event.key.keysym.sym == SDLK_ESCAPE) {
+						waitForInput = 0; // exit game
+						*quit = 1;
+					} else if (event.key.keysym.sym == SDLK_n) {
+						waitForInput = 0; // restart game
+						restartGame(scrtex, renderer, body, dir, worldTime, screen, tpCount, length, delay, spdup, t3, randd, points, scores, red, blue, text, charset);
+					}
+				}
+			}
+		}
+		SDL_FillRect(screen, NULL, black);
+
+		SDL_UpdateTexture(scrtex, NULL, screen->pixels, screen->pitch);
+		SDL_RenderCopy(renderer, scrtex, NULL, NULL);
+		SDL_RenderPresent(renderer);
+	}
+
+}
+
+// checking for overlapping of fruit and snake
+bool isOverlapping(int fruitX, int fruitY, SDL_Rect segment) {
+    // check if two rectangles (fruit and segment) overlap
+    return !(fruitX + FRUIT_SIZE <= segment.x ||  // fruit is left of segment
+             fruitX >= segment.x + SEGMENT_SIZE || // fruit is right of segment
+             fruitY + FRUIT_SIZE <= segment.y ||  // fruit is above segment
+             fruitY >= segment.y + SEGMENT_SIZE); // fruit is below segment
+}
+
+// initial snake position
+void initSnake(SDL_Rect *body, int *dir, int *p){
+	for(int i=0; i<INIT_LENGTH; i++){
+		body[i] = {SCREEN_WIDTH/2-*p,SCREEN_HEIGHT/2,SEGMENT_SIZE,SEGMENT_SIZE};
+		dir[i] = RIGHT;
+		(*p)+=10;
+	}	
+}
+
+
+//------------------------------------------------
+//-------------------  LOOP ----------------------
+//------------------------------------------------
+
+// loop for collecting head turning point movements
+void mainLoop(SDL_Texture* scrtex, SDL_Renderer* renderer, TurningPoint *turningPoints, SDL_Event event, int *lastMoveTime, int t2, int *quit, SDL_Rect *body, int* dir, double *worldTime, SDL_Surface *screen, int *tpCount, int *length, double *delay, int *spdup, int *t3, int* randd, int u_no, int d_no, int r_no, int l_no, int *points, BestScore *scores, int red, int blue, SDL_Surface *charset, char text[]){
 	while(SDL_PollEvent(&event)) {
 		switch(event.type) {
 			case SDL_KEYDOWN:
 				if(event.key.keysym.sym == SDLK_ESCAPE) *quit = 1;
-				if(event.key.keysym.sym == SDLK_n) restartGame(body, dir, worldTime, screen, tpCount, length, delay, spdup, t3, randd);
+				if(event.key.keysym.sym == SDLK_n) restartGame(scrtex, renderer, body, dir, worldTime, screen, tpCount, length, delay, spdup, t3, randd, points, scores, red, blue, text, charset);
 				// check if it's time for the next movement
 				// adds a turning point coordinates when head makes the move
 				if (t2 - *lastMoveTime > MOVE_DELAY) {
@@ -276,90 +500,13 @@ void mainLoop(TurningPoint *turningPoints, SDL_Event event, int *lastMoveTime, i
 
 }
 
-void move(int *dir, TurningPoint *turningPoints, SDL_Rect *body, int *selfCollision, int *tpCount, int step, int length){
-	for (int i = 0; i < length; i++) {
-		// move the segment in its current direction
-		switch (dir[i]) {
-			case DOWN: body[i].y += (int)step; break;
-			case UP: body[i].y -= (int)step; break;
-			case RIGHT: body[i].x += (int)step; break;
-			case LEFT: body[i].x -= (int)step; break;
-		}
-		// if(i != 0 && abs(body[0].x - body[i].x) < TOLERANCE && abs(body[0].y - body[i].y) < TOLERANCE){
-		// 	selfCollision = 1;
-		// 	break;
-		// }
-		// if self collision
-		if (i != 0 && body[0].x == body[i].x && body[0].y == body[i].y) {
-			*selfCollision = 1;
-			break;
-		}
-		// check each turning point
-		for (int j = 0; j < *tpCount; j++) {
-			// if the segment reaches the turning point, its direction is changed accordingly
-			if (abs(body[i].x - turningPoints[j].x) < TOLERANCE && abs(body[i].y - turningPoints[j].y) < TOLERANCE) {
-				dir[i] = turningPoints[j].dir;
-				// remove the turning point if it's no longer relevant
-				if (i == length - 1) { // Last segment passed the turning point
-					for (int k = j; k < *tpCount - 1; k++) {
-						turningPoints[k].dir = turningPoints[k + 1].dir;
-						turningPoints[k].y = turningPoints[k + 1].y;
-						turningPoints[k].x = turningPoints[k + 1].x;
-					}
-					(*tpCount)--;
-				}
-			}
-		}
-	}
-}
 
-void collision(SDL_Surface *screen, SDL_Surface *charset, SDL_Renderer *renderer, SDL_Texture *scrtex, int *selfCollision, int *quit, char text[], SDL_Rect *body, int* dir, double *worldTime, int *tpCount, int *length, int black, int red, int blue, double *delay, int *spdup, int *t3, int *randd){
-	if (*selfCollision) {
-		*selfCollision = 0;
-		DrawRectangle(screen, SCREEN_WIDTH / 2 - 110, SCREEN_HEIGHT / 2 - 22, 220, 54, red, blue); // Adjust rectangle to center
-		sprintf(text, "Snake hit itself!");
-		DrawString(screen, screen->w / 2 - strlen(text) * 8 / 2, screen->h / 2 - 16, text, charset);
-		sprintf(text, "1. Press ESC to exit;");
-		DrawString(screen, screen->w / 2 - strlen(text) * 8 / 2, screen->h / 2, text, charset);
-		sprintf(text, "2. Press N for a new game;");
-		DrawString(screen, screen->w / 2 - strlen(text) * 8 / 2, screen->h / 2 + 16, text, charset);
+//------------------------------------------------
+//----------------  FRUIT & DOT ------------------
+//------------------------------------------------
 
-		SDL_UpdateTexture(scrtex, NULL, screen->pixels, screen->pitch);
-		SDL_RenderCopy(renderer, scrtex, NULL, NULL);
-		SDL_RenderPresent(renderer);
 
-		int waitForInput = 1;
-		while (waitForInput) {
-			SDL_Event event;
-			while (SDL_PollEvent(&event)) {
-				if (event.type == SDL_KEYDOWN) {
-					if (event.key.keysym.sym == SDLK_ESCAPE) {
-						waitForInput = 0; // Exit game
-						*quit = 1;
-					} else if (event.key.keysym.sym == SDLK_n) {
-						waitForInput = 0; // Restart game
-						restartGame(body, dir, worldTime, screen, tpCount, length, delay, spdup, t3, randd);
-					}
-				}
-			}
-		}
-		SDL_FillRect(screen, NULL, black);
-
-		SDL_UpdateTexture(scrtex, NULL, screen->pixels, screen->pitch);
-		SDL_RenderCopy(renderer, scrtex, NULL, NULL);
-		SDL_RenderPresent(renderer);
-	}
-
-}
-
-bool isOverlapping(int fruitX, int fruitY, SDL_Rect segment) {
-    // check if two rectangles (fruit and segment) overlap
-    return !(fruitX + FRUIT_SIZE <= segment.x ||  // fruit is left of segment
-             fruitX >= segment.x + SEGMENT_SIZE || // fruit is right of segment
-             fruitY + FRUIT_SIZE <= segment.y ||  // fruit is above segment
-             fruitY >= segment.y + SEGMENT_SIZE); // fruit is below segment
-}
-
+// generating random fruit coordinates
 void generateFruitCoordinates(SDL_Rect* body, int length, int *x, int *y) {
     bool positionValid = false;
 
@@ -379,10 +526,12 @@ void generateFruitCoordinates(SDL_Rect* body, int length, int *x, int *y) {
     }
 }
 
-void fruitTouch(SDL_Rect **body, SDL_Rect *Fruit, int fruitX, int fruitY, int *length, int **dir){
+// logic for head touching the fruit
+void fruitTouch(SDL_Rect **body, SDL_Rect *Fruit, int fruitX, int fruitY, int *length, int **dir, int *points){
 	if((*body)[0].x < Fruit->x+FRUIT_SIZE && (*body)[0].x+SEGMENT_SIZE > Fruit->x &&
 		(*body)[0].y < Fruit->y+FRUIT_SIZE && (*body)[0].y+SEGMENT_SIZE > Fruit->y){
 		fruitX = rand() % (SCREEN_WIDTH - FRUIT_MARGIN * 2) + FRUIT_MARGIN;
+		(*points)+=1;
 		fruitY = MENU_HEIGHT + rand() % (SCREEN_HEIGHT - MENU_HEIGHT - FRUIT_MARGIN);
 		generateFruitCoordinates(*body, *length, &fruitX, &fruitY);
 		Fruit->x = fruitX;
@@ -425,17 +574,17 @@ void fruitTouch(SDL_Rect **body, SDL_Rect *Fruit, int fruitX, int fruitY, int *l
 	}					
 }
 
-void dotTouch(SDL_Rect **body, SDL_Rect *Dot, int dotX, int dotY, int fruitX, int fruitY, int *length, int **dir, double *delay, int *t3, int *randd, int worldTime, double *redTime){
+// logic for head touching the red dot
+void dotTouch(SDL_Rect **body, SDL_Rect *Dot, int dotX, int dotY, int fruitX, int fruitY, int *length, int **dir, double *delay, int *t3, int *randd, int worldTime, double *redTime, int *points){
 	if((*body)[0].x < Dot->x+FRUIT_SIZE && (*body)[0].x+SEGMENT_SIZE > Dot->x &&
 		(*body)[0].y < Dot->y+FRUIT_SIZE && (*body)[0].y+SEGMENT_SIZE > Dot->y){
-		// dotX = rand() % (SCREEN_WIDTH - FRUIT_MARGIN * 2) + FRUIT_MARGIN;
-		// dotY = MENU_HEIGHT + rand() % (SCREEN_HEIGHT - MENU_HEIGHT);
+		(*points)+=2; // 2pts for eating red dot
 		do{
 			generateFruitCoordinates(*body, *length, &dotX, &dotY);
-		}while(dotX == fruitX && dotY == fruitY);
+		}while(dotX == fruitX && dotY == fruitY); // ensuring red dot and fruit dont have same coords
 
 		double f = RED_SPEED;
-		double a = (1+(f/100));
+		double a = (1+(f/100)); // slowdown factor
 		(*delay)*=a;
 
 		Dot->x = dotX;
@@ -447,6 +596,34 @@ void dotTouch(SDL_Rect **body, SDL_Rect *Dot, int dotX, int dotY, int fruitX, in
 	}
 }
 
+// loading animation for the remaining time of red dot
+void redDotLoad(SDL_Surface *screen, double redTime, int red, int blue, int white){
+	for(int i=0; i<RED_INT;i++){
+		if(redTime == 0){
+			for(int j=0; j<RED_INT;j++){
+				DrawRectangle(screen, 125+1+j*15, 60, 15, 15, red, blue);			
+			}
+		}
+		else{
+			if(i < redTime){
+				for(int j=0; j<=i; j++){
+					DrawRectangle(screen, 125+1+j*15, 60, 15, 15, red, white);			
+				}
+			}
+			else{
+				for(int j=i+1; j<RED_INT; j++){
+					DrawRectangle(screen, 125+1+j*15, 60, 15, 15, red, blue);			
+				}
+			}
+		}
+	}
+}
+
+//------------------------------------------------
+//----------------  GRAPHIC ----------------------
+//------------------------------------------------
+
+// loading snake bitmaps created by me
 void loadBitmaps(SDL_Surface **headU, SDL_Surface **headD, SDL_Surface **headL, SDL_Surface **headR, SDL_Surface **bodyUD, SDL_Surface **bodyLR){
 	*headU = SDL_LoadBMP("bmps/snake_h_u.bmp");
 	if (headU == NULL){
@@ -480,36 +657,7 @@ void loadBitmaps(SDL_Surface **headU, SDL_Surface **headD, SDL_Surface **headL, 
 	}
 }
 
-void initSnake(SDL_Rect *body, int *dir, int *p){
-	for(int i=0; i<INIT_LENGTH; i++){
-		body[i] = {SCREEN_WIDTH/2-*p,SCREEN_HEIGHT/2,SEGMENT_SIZE,SEGMENT_SIZE};
-		dir[i] = RIGHT;
-		(*p)+=10;
-	}	
-}
-
-void redDotLoad(SDL_Surface *screen, double redTime, int red, int blue, int white){
-	for(int i=0; i<RED_INT;i++){
-		if(redTime == 0){
-			for(int j=0; j<RED_INT;j++){
-				DrawRectangle(screen, 125+1+j*15, 60, 15, 15, red, blue);			
-			}
-		}
-		else{
-			if(i < redTime){
-				for(int j=0; j<=i; j++){
-					DrawRectangle(screen, 125+1+j*15, 60, 15, 15, red, white);			
-				}
-			}
-			else{
-				for(int j=i+1; j<RED_INT; j++){
-					DrawRectangle(screen, 125+1+j*15, 60, 15, 15, red, blue);			
-				}
-			}
-		}
-	}
-}
-
+// drawing my bitmaps on the snake
 void drawBody(SDL_Rect* body, int length, int *dir, SDL_Surface *screen, SDL_Surface *headU, SDL_Surface *headD, SDL_Surface *headL, SDL_Surface *headR, SDL_Surface *bodyUD, SDL_Surface *bodyLR){
 	for(int i=0; i<length; i++){
 		if(i==0){
@@ -531,25 +679,28 @@ void drawBody(SDL_Rect* body, int length, int *dir, SDL_Surface *screen, SDL_Sur
 	}
 }
 
-
+//------------------------------------------------
+//----------------  MAIN FUNCTION ----------------
+//------------------------------------------------
 
 int main(){
     int t1, t2, t3, quit, rc;
-	int fruitX, fruitY;
-	int dotX, dotY;
-	int randd=1;
+	int fruitX, fruitY; // blue fruits coords
+	int dotX, dotY; // red dots coords
+	int randd=1; // flag for randomizing red dot spawn
 	int redWait;
-	int l_no = 0;
-	int r_no = 0;
-	int u_no = 0;
-	int d_no = 0;
+	int l_no = 0; // left turn blockade
+	int r_no = 0; // right turn blockade
+	int u_no = 0; // up turn blockade
+	int d_no = 0; // down turn blockade
 	double step;
 	step = STEP_SIZE;
 	double delay;
 	delay = DELAY;
+	int points = 0;
     SDL_Event event;
 	SDL_Surface *screen, *charset;
-	SDL_Surface *headU, *headD, *headL, *headR, *bodyUD, *bodyLR;
+	SDL_Surface *headU, *headD, *headL, *headR, *bodyUD, *bodyLR; // SNAKE BITMAPS
 	SDL_Surface *snake;
 	SDL_Texture *scrtex;
 	SDL_Window *window;
@@ -630,7 +781,7 @@ int main(){
 	SDL_Rect Dot = {dotX, dotY, FRUIT_SIZE, FRUIT_SIZE};  // struct for the red dot
 	SDL_FillRect(screen, &Dot, black);
 	redTime = 0;
-
+	BestScore scores[BEST_COUNT]; 
 	// initial snake position and directions
 	initSnake(body, dir, &p);
 	
@@ -649,7 +800,7 @@ int main(){
         DrawRectangle(screen, 4, 4, SCREEN_WIDTH - 8, MENU_HEIGHT, red, blue); // menu window
 		sprintf(text, "Snake game | Michal Binek 203726 | Time = %.1lf s", worldTime);
 		DrawString(screen, screen->w / 2 - strlen(text) * 8 / 2, 10, text, charset);
-		sprintf(text, "Requirements: 1-4; A-C");
+		sprintf(text, "Requirements: 1-4; A-D + F");
 		DrawString(screen, screen->w / 2 - strlen(text) * 8 / 2, 26, text, charset);
 		sprintf(text, "Esc - exit | n - new game");
 		DrawString(screen, screen->w / 2 - strlen(text) * 8 / 2, 42, text, charset);
@@ -657,19 +808,21 @@ int main(){
 		DrawRectangle(screen, 4, MENU_HEIGHT+2, SCREEN_WIDTH - 8, 22, red, blue); // red dot and points window
 		sprintf(text, "Red dot time: ");
 		DrawString(screen, 10, 63, text, charset);
+		sprintf(text, "Points: %d", points);
+		DrawString(screen, SCREEN_WIDTH-200, 63, text, charset);
 		DrawRectangle(screen, 125, MENU_HEIGHT+5, RED_INT*15+2, 17, red, blue);
 
 		redDotLoad(screen, redTime, red, blue, white);
 		
-		mainLoop(turningPoints, event, &lastMoveTime, t2, &quit, body, dir, &worldTime, screen, &tpCount, &length, &delay, &spdup, &t3, &randd, u_no, d_no, r_no, l_no);
+		mainLoop(scrtex, renderer, turningPoints, event, &lastMoveTime, t2, &quit, body, dir, &worldTime, screen, &tpCount, &length, &delay, &spdup, &t3, &randd, u_no, d_no, r_no, l_no, &points, scores, red, blue, charset, text);
         // moving the head
 		int selfCollision = 0; // self collision flag
 		move(dir, turningPoints, body, &selfCollision, &tpCount, step, length);
 		// if self collision detected, the option menu is displayed
-		collision(screen, charset, renderer, scrtex, &selfCollision, &quit, text, body, dir, &worldTime, &tpCount, &length, black, red, blue, &delay, &spdup, &t3, &randd);
+		collision(screen, charset, renderer, scrtex, &selfCollision, &quit, text, body, dir, &worldTime, &tpCount, &length, black, red, blue, &delay, &spdup, &t3, &randd, &points, scores);
 		directions(body, dir, &tpCount, turningPoints, &u_no, &d_no, &r_no, &l_no);
 		// snake touching the fruit conditions
-		fruitTouch(&body, &Fruit, fruitX, fruitY, &length, &dir);
+		fruitTouch(&body, &Fruit, fruitX, fruitY, &length, &dir, &points);
 		// deciding the random point in time when red dot appears
 		if(randd == 1){
 			redWait = rand() % RED_END + RED_START;
@@ -679,7 +832,7 @@ int main(){
 		if(worldTime - t3 > redWait){
 			redTime += delta; 
 			SDL_FillRect(screen, &Dot, red);
-        	dotTouch(&body, &Dot, dotX, dotY, fruitX, fruitY, &length, &dir, &delay, &t3, &randd, worldTime, &redTime);
+        	dotTouch(&body, &Dot, dotX, dotY, fruitX, fruitY, &length, &dir, &delay, &t3, &randd, worldTime, &redTime, &points);
 			
 			// if the dot presence exceeds the allowed time condition
 			if(redTime>RED_INT){
@@ -710,6 +863,7 @@ int main(){
 		SDL_RenderClear(renderer);
 		SDL_RenderCopy(renderer, scrtex, NULL, NULL);
 		SDL_RenderPresent(renderer);
+		// speeding up the snake
 		if(spdup == 1 && worldTime > SPEED_INT){
         	double f = SPEED_FACT;
 			double a = (1-(f/100));
